@@ -92,26 +92,31 @@ except Exception as e:
 
 # 5. Initialize TVAE with GPU
 print(f"\n[5/9] Initializing Synthcity TVAE plugin (GPU mode)...")
+device = torch.device("cuda")  # Pydantic v2 requires torch.device object
 try:
     # model = Plugins().get(
     #     "tvae",
-    #     device="cuda",  # Force GPU usage
+    #     device=device,
     # )
     # model = Plugins().get(
     #     "rtvae",
-    #     device="cuda",  # Force GPU usage
+    #     device=device,
     # )
     # model = Plugins().get(
     #     "ctgan",
-    #     device="cuda",  # Force GPU usage
+    #     device=device,
     # )
     # model = Plugins().get(
     #     "dpgan",
-    #     device="cuda",  # Force GPU usage
+    #     device=device,
+    # )
+    # model = Plugins().get(
+    #     "nflow",
+    #     device=device,
     # )
     model = Plugins().get(
-        "nflow",
-        device="cuda",  # Force GPU usage
+        "ddpm",
+        device=device,
     )
     print("  [OK] TVAE plugin initialized")
 except Exception as e:
