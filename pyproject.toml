@@ -12,11 +12,6 @@ dependencies = [
     "torchaudio==2.7.0",
 ]
 
-[tool.uv]
-override-dependencies = [
-    "torch>=2.7",
-]
-
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
