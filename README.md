@@ -12,7 +12,7 @@ Test if:
 
 ## Strategy
 
-Uses uv's `override-dependencies` to force PyTorch 2.7.0 installation, bypassing Synthcity's constraint of `torch<2.3` (from tsai dependency).
+Tests PyTorch 2.7.0 + CUDA 12.8 with Synthcity to verify compatibility, despite Synthcity's constraint of `torch<2.3` (from tsai dependency).
 
 **Expected behavior**: Some Synthcity features (especially tsai-based time series models) may break, but basic TVAE should work if PyTorch API hasn't changed significantly.
 
@@ -25,7 +25,7 @@ Uses uv's `override-dependencies` to force PyTorch 2.7.0 installation, bypassing
 ## Setup
 
 ```bash
-# Install dependencies with uv (will override PyTorch constraints)
+# Install dependencies with uv
 uv sync
 
 # Verify GPU is detected
@@ -60,7 +60,7 @@ uv run python test_synthcity_tvae.py
 ## Dependencies
 
 - Python 3.11
-- PyTorch 2.7.0 (CUDA 12.8) - FORCED via override-dependencies
+- PyTorch 2.7.0 (CUDA 12.8)
 - Synthcity 0.2.x
 - pandas, numpy
 
