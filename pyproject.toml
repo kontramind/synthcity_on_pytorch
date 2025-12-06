@@ -11,13 +11,17 @@ dependencies = [
     "scikit-learn>=1.0,<1.4",
     "ipython",
     "cloudpickle",
-    "synthcity>=0.2.0",
+    "synthcity==0.2.12",
     "torch==2.7.0",
     "torchvision==0.22.0",
     "torchaudio==2.7.0",
 ]
 
 [tool.uv]
+# Force PyTorch 2.7 despite synthcity requiring torch<2.3
+override-dependencies = [
+    "torch>=2.7.0",
+]
 constraint-dependencies = [
     "numpy<2.0",
     "scipy<1.14",
