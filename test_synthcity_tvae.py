@@ -178,18 +178,27 @@ except Exception as e:
 
 # 7. Save model
 print("\n[7/9] Saving model...")
-model_path = Path("synthcity_tvae_model.pkl")
+model_path = Path("synthcity_model.pkl")
+model_name = model.name()
+
+# Import synthcity serialization utilities
+from synthcity.utils.serialization import (
+    save as synthcity_save,
+    save_to_file as synthcity_save_to_file,
+)
+
 try:
-    # Synthcity's save() returns bytes, save_to_file() writes to disk
-    if hasattr(model, 'save_to_file'):
-        model.save_to_file(model_path)
-        print(f"  [OK] Model saved via save_to_file(): {model_path}")
+    if model_name == "dpgan":
+        # DPGAN requires file-based serialization (can't use byte serialization)
+        print(f"  [INFO] Using file-based serialization for {model_name}")
+        synthcity_save_to_file(model_path, model)
+        print(f"  [OK] Model saved via synthcity_save_to_file(): {model_path}")
     else:
-        # save() returns bytes
-        model_bytes = model.save()
+        # Standard models use byte serialization
+        model_bytes = synthcity_save(model)
         with open(model_path, 'wb') as f:
             f.write(model_bytes)
-        print(f"  [OK] Model saved via save(): {model_path}")
+        print(f"  [OK] Model saved via synthcity_save(): {model_path}")
     print(f"  File size: {model_path.stat().st_size / 1024:.1f} KB")
 except Exception as e:
     print(f"  [WARN] Save via Synthcity failed: {e}")
@@ -206,15 +215,25 @@ except Exception as e:
 
 # 8. Load model
 print("\n[8/9] Loading model from disk...")
+
+# Import synthcity serialization utilities
+from synthcity.utils.serialization import (
+    load as synthcity_load,
+    load_from_file as synthcity_load_from_file,
+)
+
 try:
-    # Try Synthcity's load methods first
-    if hasattr(Plugins, 'load_from_file'):
-        loaded_model = Plugins().load_from_file(model_path)
+    if model_name == "dpgan":
+        # DPGAN requires file-based serialization
+        print(f"  [INFO] Using file-based loading for {model_name}")
+        loaded_model = synthcity_load_from_file(model_path)
+        print("  [OK] Model loaded via synthcity_load_from_file()!")
     else:
+        # Standard models use byte serialization
         with open(model_path, 'rb') as f:
             model_bytes = f.read()
-        loaded_model = Plugins().load(model_bytes)
-    print("  [OK] Model loaded via Synthcity!")
+        loaded_model = synthcity_load(model_bytes)
+        print("  [OK] Model loaded via synthcity_load()!")
 except Exception as e:
     print(f"  [WARN] Load via Synthcity failed: {e}")
     print("  Trying cloudpickle load...")
