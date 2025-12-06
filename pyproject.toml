@@ -5,7 +5,7 @@ description = "Minimal Synthcity + PyTorch 2.7 + CUDA 12.8 compatibility test fo
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "pandas>=2.0.0",
-    "numpy>=1.24.0",
+    "numpy>=1.24.0,<2.0",
     "scipy>=1.10,<1.14",
     "pydantic>=1.10,<2.0",
     "scikit-learn>=1.0,<1.4",
@@ -17,6 +17,7 @@ dependencies = [
 
 [tool.uv]
 constraint-dependencies = [
+    "numpy<2.0",
     "scipy<1.14",
     "pydantic<2.0",
     "scikit-learn<1.4",
