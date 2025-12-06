@@ -127,20 +127,30 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-# 7. Save model (pickle format, same as sdpype)
-print("\n[7/9] Saving model (pickle format)...")
+# 7. Save model
+print("\n[7/9] Saving model...")
 model_path = Path("synthcity_tvae_model.pkl")
 try:
-    model.save(str(model_path))
-    print(f"  [OK] Model saved to: {model_path}")
+    # Synthcity's save() returns bytes, save_to_file() writes to disk
+    if hasattr(model, 'save_to_file'):
+        model.save_to_file(model_path)
+        print(f"  [OK] Model saved via save_to_file(): {model_path}")
+    else:
+        # save() returns bytes
+        model_bytes = model.save()
+        with open(model_path, 'wb') as f:
+            f.write(model_bytes)
+        print(f"  [OK] Model saved via save(): {model_path}")
     print(f"  File size: {model_path.stat().st_size / 1024:.1f} KB")
 except Exception as e:
     print(f"  [WARN] Save via Synthcity failed: {e}")
-    print("  Trying alternative pickle save...")
+    print("  Trying cloudpickle (handles lambdas)...")
     try:
+        import cloudpickle
         with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
-        print(f"  [OK] Model saved via pickle: {model_path}")
+            cloudpickle.dump(model, f)
+        print(f"  [OK] Model saved via cloudpickle: {model_path}")
+        print(f"  File size: {model_path.stat().st_size / 1024:.1f} KB")
     except Exception as e2:
         print(f"  [FAIL] Alternative save also failed: {e2}")
         sys.exit(1)
@@ -148,15 +158,22 @@ except Exception as e:
 # 8. Load model
 print("\n[8/9] Loading model from disk...")
 try:
-    loaded_model = Plugins().load(str(model_path))
-    print("  [OK] Model loaded successfully!")
-except Exception as e:
-    print(f"  [WARN] Load via Plugins failed: {e}")
-    print("  Trying alternative pickle load...")
-    try:
+    # Try Synthcity's load methods first
+    if hasattr(Plugins, 'load_from_file'):
+        loaded_model = Plugins().load_from_file(model_path)
+    else:
         with open(model_path, 'rb') as f:
-            loaded_model = pickle.load(f)
-        print("  [OK] Model loaded via pickle!")
+            model_bytes = f.read()
+        loaded_model = Plugins().load(model_bytes)
+    print("  [OK] Model loaded via Synthcity!")
+except Exception as e:
+    print(f"  [WARN] Load via Synthcity failed: {e}")
+    print("  Trying cloudpickle load...")
+    try:
+        import cloudpickle
+        with open(model_path, 'rb') as f:
+            loaded_model = cloudpickle.load(f)
+        print("  [OK] Model loaded via cloudpickle!")
     except Exception as e2:
         print(f"  [FAIL] Alternative load also failed: {e2}")
         sys.exit(1)
