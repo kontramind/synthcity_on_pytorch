@@ -1,0 +1,28 @@
+[project]
+name = "synthcity-on-pytorch"
+version = "0.1.0"
+description = "Minimal Synthcity + PyTorch 2.7 + CUDA 12.8 compatibility test for RTX 5070 Ti"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "synthcity>=0.3.0",
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "torchaudio==2.7.0",
+]
+
+[tool.uv]
+override-dependencies = [
+    "torch>=2.7",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
