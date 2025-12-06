@@ -19,6 +19,7 @@ env/
 *.json
 workspace/
 output/
+checkpoints/
 
 # IDE
 .vscode/

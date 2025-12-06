@@ -93,34 +93,69 @@ except Exception as e:
 # 5. Initialize TVAE with GPU
 print(f"\n[5/9] Initializing Synthcity TVAE plugin (GPU mode)...")
 try:
-    # model = Plugins().get(
+    # model = Plugins().get( # -> works
     #     "tvae",
-    #     device="cuda",  # Force GPU usage
+    #     device=torch.device("cuda"),
     # )
-    # model = Plugins().get(
+    # model = Plugins().get( # -> works
     #     "rtvae",
-    #     device="cuda",  # Force GPU usage
+    #     device=torch.device("cuda"),
     # )
-    # model = Plugins().get(
+    # model = Plugins().get( # -> works
     #     "ctgan",
-    #     device="cuda",  # Force GPU usage
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> works
+    #     "arf",
+    #     device=torch.device("cuda"),
     # )
     # model = Plugins().get(
-    #     "dpgan",
-    #     device="cuda",  # Force GPU usage
+    #     "marginal_distributions",
+    #     device=torch.device("cuda"),
+    # )        
+    # model = Plugins().get( # -> works
+    #     "nflow",
+    #     device=torch.device("cuda"),
+    # )   
+    # model = Plugins().get( # -> works
+    #     "ddpm",
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> works
+    #     "pategan",
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> works
+    #     "adsgan",
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> works
+    #     "bayesian_network",
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> works -> but too slow -> SKIP
+    #     "decaf",
+    #     device=torch.device("cuda"),
+    # )
+    # model = Plugins().get( # -> SKIP
+    #     "aim",
+    #     device=torch.device("cuda"),
     # )
     model = Plugins().get(
-        "nflow",
-        device="cuda",  # Force GPU usage
+        "dpgan",
+        device=torch.device("cuda"),
     )
-    print("  [OK] TVAE plugin initialized")
+    # model = Plugins().get( # -> SKIP
+    #     "privbayes",
+    # )
+    print(f"  [OK] {model.name().upper()} plugin initialized")
 except Exception as e:
     print(f"  [FAIL] TVAE initialization failed: {e}")
     print("\n  This likely means PyTorch 2.7 API changes broke Synthcity")
     sys.exit(1)
 
 # 6. Train model
-print("\n[6/9] Training TVAE on GPU...")
+print(f"\n[6/9] Training {model.name().upper()} on GPU...")
 try:
     model.fit(loader)
     print("  [OK] Training completed successfully!")
