@@ -61,7 +61,7 @@ uv run python test_synthcity_tvae.py
 
 - Python 3.11
 - PyTorch 2.7.0 (CUDA 12.8) - FORCED via override-dependencies
-- Synthcity 0.3+
+- Synthcity 0.2.x
 - pandas, numpy
 
 ## References
