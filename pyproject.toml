@@ -6,6 +6,7 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.24.0",
+    "scipy>=1.10,<2.0",
     "synthcity>=0.2.0",
     "torch==2.7.0",
     "torchvision==0.22.0",
