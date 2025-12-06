@@ -11,6 +11,7 @@ dependencies = [
     "scikit-learn>=1.5.0",
     "ipython",
     "cloudpickle",
+    "opacus<1.5.0",
     "synthcity==0.2.12",
     "torch>=2.7.0",
     "torchvision>=0.22.0",
@@ -25,6 +26,7 @@ override-dependencies = [
 constraint-dependencies = [
     "numpy<2.0",
     "scipy<1.14",
+    "opacus<1.5.0",
 ]
 
 [[tool.uv.index]]
