@@ -91,12 +91,26 @@ except Exception as e:
     sys.exit(1)
 
 # 5. Initialize TVAE with GPU
-print("\n[5/9] Initializing Synthcity TVAE plugin (GPU mode)...")
+print(f"\n[5/9] Initializing Synthcity TVAE plugin (GPU mode)...")
 try:
+    # model = Plugins().get(
+    #     "tvae",
+    #     device="cuda",  # Force GPU usage
+    # )
+    # model = Plugins().get(
+    #     "rtvae",
+    #     device="cuda",  # Force GPU usage
+    # )
+    # model = Plugins().get(
+    #     "ctgan",
+    #     device="cuda",  # Force GPU usage
+    # )
+    # model = Plugins().get(
+    #     "dpgan",
+    #     device="cuda",  # Force GPU usage
+    # )
     model = Plugins().get(
-        "tvae",
-        n_iter=100,  # epochs
-        batch_size=500,
+        "nflow",
         device="cuda",  # Force GPU usage
     )
     print("  [OK] TVAE plugin initialized")
