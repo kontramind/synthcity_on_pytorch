@@ -16,6 +16,10 @@ dependencies = [
     "torch>=2.7.0",
     "torchvision>=0.22.0",
     "torchaudio>=2.7.0",
+    "sdv>=1.0.0",
+    "sdmetrics>=0.14.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",    
 ]
 
 [tool.uv]
