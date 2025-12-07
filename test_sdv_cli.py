@@ -7,6 +7,8 @@ Supports: TVAE, CTGAN, CopulaGAN, GaussianCopula
 from enum import Enum
 from pathlib import Path
 import pickle
+import random
+import time
 
 import numpy as np
 import pandas as pd
@@ -35,6 +37,11 @@ class SynthesizerType(str, Enum):
     copulagan = "copulagan"
     gaussian = "gaussian"
 
+# ----------------------------------------------------------------------
+# Quality metric thresholds (used across single-column and pair metrics)
+# ----------------------------------------------------------------------
+GOOD_THRESHOLD = 0.9
+OK_THRESHOLD = 0.7
 
 def check_environment() -> tuple[bool, dict]:
     """Check PyTorch and GPU environment."""
@@ -81,9 +88,17 @@ def display_environment(info: dict) -> None:
     console.print(table)
 
 
+def set_random_seed(seed: int = 42) -> None:
+    """Set random seeds for reproducibility across numpy, torch, and Python."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def generate_training_data(rows: int) -> pd.DataFrame:
     """Generate synthetic training data."""
-    np.random.seed(42)
 
     return pd.DataFrame({
         # 4 numerical features
@@ -135,6 +150,24 @@ def create_synthesizer(
     return model, supports_gpu
 
 
+def get_model_device(model) -> torch.device | None:
+    """Try to infer the device of the underlying torch model, if any."""
+    inner = getattr(model, "_model", None)
+    if inner is None:
+        return None
+
+    for attr in ("decoder", "generator", "discriminator"):
+        module = getattr(inner, attr, None)
+        if module is not None:
+            try:
+                param = next(module.parameters())
+            except StopIteration:
+                return None
+            return param.device
+
+    return None
+
+
 def display_data_sample(data: pd.DataFrame, title: str) -> None:
     """Display data sample with Rich table."""
     table = Table(title=title)
@@ -158,8 +191,9 @@ def evaluate_quality(
     Uses KSComplement for numerical columns and TVComplement for categorical.
     Returns per-column scores and overall average.
     """
-    table_name = list(metadata.tables.keys())[0]
-    columns_meta = metadata.tables[table_name].columns
+    meta_dict = metadata.to_dict()
+    table_name = next(iter(meta_dict["tables"]))
+    columns_meta = meta_dict["tables"][table_name]["columns"]
 
     scores = {}
 
@@ -202,9 +236,9 @@ def display_quality_scores(scores: dict, avg_score: float) -> None:
         score = info["score"]
 
         # Color code by score threshold
-        if score >= 0.9:
+        if score >= GOOD_THRESHOLD:
             score_str = f"[green]{score:.4f}[/green]"
-        elif score >= 0.7:
+        elif score >= OK_THRESHOLD:
             score_str = f"[yellow]{score:.4f}[/yellow]"
         else:
             score_str = f"[red]{score:.4f}[/red]"
@@ -213,9 +247,9 @@ def display_quality_scores(scores: dict, avg_score: float) -> None:
 
     # Add separator and average
     table.add_section()
-    if avg_score >= 0.9:
+    if avg_score >= GOOD_THRESHOLD:
         avg_str = f"[bold green]{avg_score:.4f}[/bold green]"
-    elif avg_score >= 0.7:
+    elif avg_score >= OK_THRESHOLD:
         avg_str = f"[bold yellow]{avg_score:.4f}[/bold yellow]"
     else:
         avg_str = f"[bold red]{avg_score:.4f}[/bold red]"
@@ -238,8 +272,9 @@ def evaluate_column_pairs(
     """
     from itertools import combinations
 
-    table_name = list(metadata.tables.keys())[0]
-    columns_meta = metadata.tables[table_name].columns
+    meta_dict = metadata.to_dict()
+    table_name = next(iter(meta_dict["tables"]))
+    columns_meta = meta_dict["tables"][table_name]["columns"]
 
     # Separate columns by type
     numerical_cols = [
@@ -294,9 +329,9 @@ def display_column_pair_scores(scores: dict, avg_score: float) -> None:
         score = info["score"]
 
         # Color code by score threshold
-        if score >= 0.9:
+        if score >= GOOD_THRESHOLD:
             score_str = f"[green]{score:.4f}[/green]"
-        elif score >= 0.7:
+        elif score >= OK_THRESHOLD:
             score_str = f"[yellow]{score:.4f}[/yellow]"
         else:
             score_str = f"[red]{score:.4f}[/red]"
@@ -305,9 +340,9 @@ def display_column_pair_scores(scores: dict, avg_score: float) -> None:
 
     # Add separator and average
     table.add_section()
-    if avg_score >= 0.9:
+    if avg_score >= GOOD_THRESHOLD:
         avg_str = f"[bold green]{avg_score:.4f}[/bold green]"
-    elif avg_score >= 0.7:
+    elif avg_score >= OK_THRESHOLD:
         avg_str = f"[bold yellow]{avg_score:.4f}[/bold yellow]"
     else:
         avg_str = f"[bold red]{avg_score:.4f}[/bold red]"
@@ -344,13 +379,20 @@ def test(
     ),
 ) -> None:
     """Test SDV synthesizer with PyTorch 2.7 + CUDA 12.8."""
+    set_random_seed(42)
+    train_seconds = None    
+    schema_ok = True
     console.print(
         Panel.fit(
-            f"[bold blue]SDV {synthesizer.value.upper()} Test[/bold blue]\n"
-            "PyTorch 2.7 + CUDA 12.8 Compatibility",
+            (
+                f"[bold blue]SDV {synthesizer.value.upper()} Test[/bold blue]\n"
+                f"PyTorch {torch.__version__}"
+                f"{' + CUDA ' + torch.version.cuda if torch.version.cuda is not None else ''} Compatibility"
+            ),
             border_style="blue",
         )
     )
+
 
     # 1. Check environment
     console.print("\n[bold cyan]📊 Environment Check[/bold cyan]")
@@ -375,8 +417,10 @@ def test(
     metadata_path = Path("metadata.json")
     metadata.save_to_json(filepath=metadata_path, mode="overwrite")
 
-    table_name = list(metadata.tables.keys())[0]
-    column_count = len(metadata.tables[table_name].columns)
+    meta_dict = metadata.to_dict()
+    table_name = next(iter(meta_dict["tables"]))
+    columns_meta = meta_dict["tables"][table_name]["columns"]
+    column_count = len(columns_meta)
     console.print(f"  ✅ Metadata created with {column_count} columns")
     console.print(f"  ✅ Saved to {metadata_path}")
 
@@ -393,17 +437,22 @@ def test(
     # 5. Train model
     console.print(f"\n[bold cyan]⏳ Training {synthesizer.value.upper()}[/bold cyan]")
     try:
+        start_time = time.perf_counter()
         model.fit(data)
+        end_time = time.perf_counter()
+        train_seconds = end_time - start_time
         console.print("  ✅ Training completed successfully!")
+        console.print(f"  ⏱ Training time: {train_seconds:.2f} seconds")
 
         # Check GPU usage for neural models
-        if supports_gpu and hasattr(model, "_model") and hasattr(model._model, "decoder"):
-            device = next(model._model.decoder.parameters()).device
-            console.print(f"  Model device: {device}")
-            if device.type == "cuda":
-                console.print("  ✅ Training used GPU!")
-            else:
-                console.print("  ⚠️ Training used CPU")
+        if supports_gpu:
+            device = get_model_device(model)
+            if device is not None:
+                console.print(f"  Model device: {device}")
+                if device.type == "cuda":
+                    console.print("  ✅ Training used GPU!")
+                else:
+                    console.print("  ⚠️ Training used CPU")
 
     except Exception as e:
         console.print(f"  [red]❌ Training failed: {e}[/red]")
@@ -428,9 +477,10 @@ def test(
             loaded_model = pickle.load(f)
         console.print("  ✅ Model loaded successfully!")
 
-        if supports_gpu and hasattr(loaded_model, "_model") and hasattr(loaded_model._model, "decoder"):
-            device = next(loaded_model._model.decoder.parameters()).device
-            console.print(f"  Loaded model device: {device}")
+        if supports_gpu:
+            device = get_model_device(loaded_model)
+            if device is not None:
+                console.print(f"  Loaded model device: {device}")
 
     except Exception as e:
         console.print(f"  [red]❌ Load failed: {e}[/red]")
@@ -446,8 +496,10 @@ def test(
 
         if set(synthetic.columns) == set(data.columns):
             console.print("  ✅ Schema matches original data")
+            schema_ok = True
         else:
             console.print("  [yellow]⚠️ Schema mismatch![/yellow]")
+            schema_ok = False
 
     except Exception as e:
         console.print(f"  [red]❌ Generation failed: {e}[/red]")
@@ -495,31 +547,46 @@ def test(
         summary_table.add_row("Compute", env_info["compute_capability"])
     summary_table.add_row("Synthesizer", synthesizer.value.upper())
     summary_table.add_row("Training", "✅ Completed")
+    if train_seconds is not None:
+        summary_table.add_row("Training Time", f"{train_seconds:.2f} s")
     summary_table.add_row("Save/Load", "✅ Working")
     summary_table.add_row("Generation", f"✅ {samples:,} samples")
-    summary_table.add_row("Schema", "✅ Valid")
+    if schema_ok:
+        summary_table.add_row("Schema", "✅ Valid")
+    else:
+        summary_table.add_row("Schema", "⚠️ Mismatch")
     if avg_score is not None:
-        if avg_score >= 0.9:
+        if avg_score >= GOOD_THRESHOLD:
             summary_table.add_row("Column Quality", f"✅ {avg_score:.4f}")
-        elif avg_score >= 0.7:
+        elif avg_score >= OK_THRESHOLD:
             summary_table.add_row("Column Quality", f"⚠️ {avg_score:.4f}")
         else:
             summary_table.add_row("Column Quality", f"❌ {avg_score:.4f}")
     if pair_avg_score is not None:
-        if pair_avg_score >= 0.9:
+        if pair_avg_score >= GOOD_THRESHOLD:
             summary_table.add_row("Pair Quality", f"✅ {pair_avg_score:.4f}")
-        elif pair_avg_score >= 0.7:
+        elif pair_avg_score >= OK_THRESHOLD:
             summary_table.add_row("Pair Quality", f"⚠️ {pair_avg_score:.4f}")
         else:
             summary_table.add_row("Pair Quality", f"❌ {pair_avg_score:.4f}")
 
     console.print("\n")
     console.print(summary_table)
+    gpu_label = "CPU only"
+    if cuda_available:
+        gpu_label = env_info.get("gpu_name") or "Unknown GPU"
+        if env_info.get("is_blackwell"):
+            gpu_label += " (Blackwell)"
+
     console.print(
         Panel.fit(
-            f"[bold green]✅ ALL TESTS PASSED![/bold green]\n\n"
-            f"SDV {synthesizer.value.upper()} is compatible with "
-            f"PyTorch 2.7 + {'RTX 5070 Ti' if env_info.get('is_blackwell') else 'your GPU'}! 🎉",
+            (
+                "[bold green]✅ ALL TESTS PASSED![/bold green]\n\n"
+                f"SDV {synthesizer.value.upper()} is compatible with "
+                f"PyTorch {env_info['pytorch_version']}"
+                f"{' + CUDA ' + env_info['cuda_version'] if env_info.get('cuda_version') else ''} "
+                f"on {gpu_label}! 🎉"
+            ),
             border_style="green",
         )
     )
