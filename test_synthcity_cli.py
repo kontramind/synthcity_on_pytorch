@@ -19,6 +19,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from synthcity.metrics.eval_statistical import AlphaPrecision
+from synthcity.plugins.core.dataloader import GenericDataLoader
+
 app = typer.Typer(help="Synthcity Plugin Test CLI for PyTorch 2.7 + CUDA 12.8")
 console = Console()
 
@@ -79,6 +82,83 @@ def display_environment(info: dict) -> None:
             table.add_row("Architecture", "✅ Blackwell detected!")
         else:
             table.add_row("Architecture", "⚠️ Not Blackwell")
+
+    console.print(table)
+
+
+def evaluate_alpha_precision(
+    real_loader,
+    synthetic_df: pd.DataFrame,
+) -> dict:
+    """
+    Compute alpha-precision metrics between real and synthetic data.
+
+    The metric only supports numeric dtypes, so we:
+      - extract the underlying real dataframe,
+      - select numeric/bool columns,
+      - align real and synthetic on those columns,
+      - build fresh GenericDataLoader instances on the numeric subset.
+    """
+    # Get real dataframe from loader
+    real_df = real_loader.dataframe()
+
+    # Numeric + boolean columns only
+    numeric_cols = real_df.select_dtypes(
+        include=[np.number, "bool"]
+    ).columns.tolist()
+
+    if not numeric_cols:
+        raise ValueError("No numeric columns available for AlphaPrecision.")
+
+    # Align columns between real and synthetic, just in case
+    numeric_cols = [c for c in numeric_cols if c in synthetic_df.columns]
+    if not numeric_cols:
+        raise ValueError(
+            "No overlapping numeric columns between real and synthetic data "
+            "for AlphaPrecision."
+        )
+
+    real_num = real_df[numeric_cols]
+    synth_num = synthetic_df[numeric_cols]
+
+    real_loader_num = GenericDataLoader(real_num)
+    syn_loader_num = GenericDataLoader(synth_num)
+
+    metric = AlphaPrecision()
+    return metric.evaluate(real_loader_num, syn_loader_num)
+
+
+def display_alpha_precision_scores(scores: dict) -> None:
+    """Display alpha-precision, beta-recall and authenticity scores."""
+    table = Table(title="Alpha-Precision / Beta-Recall / Authenticity")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    ordered_keys = [
+        "delta_precision_alpha_OC",
+        "delta_coverage_beta_OC",
+        "authenticity_OC",
+        "delta_precision_alpha_naive",
+        "delta_coverage_beta_naive",
+        "authenticity_naive",
+    ]
+
+    for key in ordered_keys:
+        if key not in scores:
+            continue
+
+        value = scores[key]
+        if isinstance(value, (int, float)):
+            if value >= 0.9:
+                value_str = f"[green]{value:.4f}[/green]"
+            elif value >= 0.7:
+                value_str = f"[yellow]{value:.4f}[/yellow]"
+            else:
+                value_str = f"[red]{value:.4f}[/red]"
+        else:
+            value_str = str(value)
+
+        table.add_row(key, value_str)
 
     console.print(table)
 
@@ -168,7 +248,7 @@ def test(
         help="Synthcity plugin to test",
     ),
     samples: int = typer.Option(
-        1000,
+        10000,
         "--samples",
         "-n",
         help="Number of synthetic samples to generate",
@@ -222,12 +302,6 @@ def test(
 
     # 3. Create Synthcity DataLoader
     console.print("\n[bold cyan]📦 Creating Synthcity DataLoader[/bold cyan]")
-    try:
-        from synthcity.plugins.core.dataloader import GenericDataLoader
-    except Exception as e:
-        console.print(f"[red]❌ Failed to import GenericDataLoader: {e}[/red]")
-        raise typer.Exit(1)
-
     try:
         loader = GenericDataLoader(data, sensitive_features=["region"])
         console.print("  ✅ DataLoader created")
@@ -372,7 +446,16 @@ def test(
         traceback.print_exc()
         raise typer.Exit(1)
 
-    # 9. GPU memory usage
+    # 9. Alpha-Precision / Beta-Recall / Authenticity
+    console.print("\n[bold cyan]📈 Alpha-Precision Evaluation[/bold cyan]")
+    alpha_scores = None
+    try:
+        alpha_scores = evaluate_alpha_precision(loader, synthetic_df)
+        display_alpha_precision_scores(alpha_scores)
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Alpha-Precision evaluation failed: {e}[/yellow]")
+
+    # 10. GPU memory usage
     if torch.cuda.is_available():
         console.print("\n[bold cyan]🔍 GPU Memory Usage[/bold cyan]")
         allocated = torch.cuda.memory_allocated(0) / 1024**2
@@ -385,7 +468,7 @@ def test(
         else:
             console.print("  ⚠️ No GPU memory allocated")
 
-    # 10. Summary
+    # 11. Summary
     summary_table = Table(title="Synthcity Test Summary", show_header=False)
     summary_table.add_column("Check", style="cyan")
     summary_table.add_column("Status", style="green")
