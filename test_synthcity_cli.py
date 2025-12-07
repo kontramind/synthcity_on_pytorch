@@ -19,7 +19,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from synthcity.metrics.eval_statistical import AlphaPrecision, PRDCScore
+from geomloss import SamplesLoss
+
+from synthcity.metrics.eval_statistical import (
+    AlphaPrecision,
+    PRDCScore,
+)
 from synthcity.metrics.eval_detection import (
     SyntheticDetectionGMM,
     SyntheticDetectionXGB,
@@ -27,7 +32,7 @@ from synthcity.metrics.eval_detection import (
     SyntheticDetectionLinear,
 )
 from synthcity.plugins.core.dataloader import GenericDataLoader
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, MinMaxScaler
 
 app = typer.Typer(help="Synthcity Plugin Test CLI for PyTorch 2.7 + CUDA 12.8")
 console = Console()
@@ -200,6 +205,69 @@ def display_prdc_scores(scores: dict) -> None:
             value_str = str(value)
 
         table.add_row(key, value_str)
+
+    console.print(table)
+
+
+def evaluate_wasserstein(
+    real_loader,
+    synthetic_df: pd.DataFrame,
+) -> float:
+    """
+    Compute Wasserstein distance in a way that mirrors synthcity's
+    WassersteinDistance implementation as closely as possible, but
+    with a CPU-only, tensorized backend to avoid KeOps/CUDA issues.
+
+    Steps (following synthcity/src/synthcity/metrics/eval_statistical.py):
+      - use the same encoded representation as other metrics
+      - pad synthetic samples with zeros if there are fewer rows
+      - MinMax-scale features based on the real data
+      - apply GeomLoss Sinkhorn OT on the scaled arrays
+    """
+    # 1) Encode real + synthetic into the common numeric space
+    real_df = real_loader.dataframe()
+    real_encoded, synth_encoded = encode_for_metrics(real_df, synthetic_df)
+
+    X = real_encoded.to_numpy(dtype=np.float32)
+    X_syn = synth_encoded.to_numpy(dtype=np.float32)
+
+    # 2) If synthetic has fewer rows, pad it with zeros (same shape as synthcity)
+    if X.shape[0] > X_syn.shape[0]:
+        pad_rows = X.shape[0] - X_syn.shape[0]
+        X_syn = np.concatenate(
+            [X_syn, np.zeros((pad_rows, X.shape[1]), dtype=X_syn.dtype)],
+            axis=0,
+        )
+
+    # 3) MinMax-scale features using real data statistics
+    scaler = MinMaxScaler().fit(X)
+    X_scaled = scaler.transform(X)
+    X_syn_scaled = scaler.transform(X_syn)
+
+    # 4) Convert to CPU tensors
+    X_ten = torch.from_numpy(X_scaled)
+    X_syn_ten = torch.from_numpy(X_syn_scaled)
+
+    # 5) Sinkhorn OT distance, tensorized backend (no KeOps/CUDA kernels)
+    OT_solver = SamplesLoss(
+        loss="sinkhorn",
+        backend="tensorized",
+    )
+
+    with torch.no_grad():
+        dist = OT_solver(X_ten, X_syn_ten).cpu().numpy().item()
+
+    return float(dist)
+
+
+def display_wasserstein_score(distance: float) -> None:
+    """Pretty-print the Wasserstein distance."""
+    table = Table(title="Wasserstein Distance (Sinkhorn OT)")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    # No hard thresholds here, just format nicely
+    table.add_row("Wasserstein distance", f"{distance:.4f}")
 
     console.print(table)
 
@@ -672,7 +740,16 @@ def test(
     except Exception as e:
         console.print(f"[yellow]⚠️ PRDC evaluation failed: {e}[/yellow]")
 
-    # 11. Detection-based evaluation (real vs synthetic)
+    # 11. Wasserstein (Sinkhorn OT) distance
+    console.print("\n[bold cyan]🌊 Wasserstein Distance Evaluation[/bold cyan]")
+    wasserstein_distance = None
+    try:
+        wasserstein_distance = evaluate_wasserstein(loader, synthetic_df)
+        display_wasserstein_score(wasserstein_distance)
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Wasserstein evaluation failed: {e}[/yellow]")
+
+    # 12. Detection-based evaluation (real vs synthetic)
     console.print("\n[bold cyan]🕵️ Detection-Based Evaluation[/bold cyan]")
     detection_scores: dict[str, float | None] | None = None
     try:
@@ -681,7 +758,7 @@ def test(
     except Exception as e:
         console.print(f"[yellow]⚠️ Detection evaluation failed: {e}[/yellow]")
 
-    # 12. GPU memory usage
+    # 13. GPU memory usage
     if torch.cuda.is_available():
         console.print("\n[bold cyan]🔍 GPU Memory Usage[/bold cyan]")
         allocated = torch.cuda.memory_allocated(0) / 1024**2
@@ -694,7 +771,7 @@ def test(
         else:
             console.print("  ⚠️ No GPU memory allocated")
 
-    # 13. Summary
+    # 14. Summary
     summary_table = Table(title="Synthcity Test Summary", show_header=False)
     summary_table.add_column("Check", style="cyan")
     summary_table.add_column("Status", style="green")
@@ -733,6 +810,9 @@ def test(
             )
         else:
             summary_table.add_row("PRDC", "✅ Evaluated")
+    if wasserstein_distance is not None:
+        summary_table.add_row("Wasserstein Dist", f"{wasserstein_distance:.4f}")
+
     if detection_scores is not None:
         # Ensemble: mean AUC across successful detectors
         vals = [v for v in detection_scores.values() if v is not None]
