@@ -20,7 +20,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from synthcity.metrics.eval_statistical import AlphaPrecision, PRDCScore
+from synthcity.metrics.eval_detection import (
+    SyntheticDetectionGMM,
+    SyntheticDetectionXGB,
+    SyntheticDetectionMLP,
+    SyntheticDetectionLinear,
+)
 from synthcity.plugins.core.dataloader import GenericDataLoader
+from sklearn.preprocessing import OrdinalEncoder
 
 app = typer.Typer(help="Synthcity Plugin Test CLI for PyTorch 2.7 + CUDA 12.8")
 console = Console()
@@ -99,30 +106,12 @@ def evaluate_alpha_precision(
       - align real and synthetic on those columns,
       - build fresh GenericDataLoader instances on the numeric subset.
     """
-    # Get real dataframe from loader
+    # Get real dataframe from loader and encode both real + synthetic
     real_df = real_loader.dataframe()
+    real_encoded, synth_encoded = encode_for_metrics(real_df, synthetic_df)
 
-    # Numeric + boolean columns only
-    numeric_cols = real_df.select_dtypes(
-        include=[np.number, "bool"]
-    ).columns.tolist()
-
-    if not numeric_cols:
-        raise ValueError("No numeric columns available for AlphaPrecision.")
-
-    # Align columns between real and synthetic, just in case
-    numeric_cols = [c for c in numeric_cols if c in synthetic_df.columns]
-    if not numeric_cols:
-        raise ValueError(
-            "No overlapping numeric columns between real and synthetic data "
-            "for AlphaPrecision."
-        )
-
-    real_num = real_df[numeric_cols]
-    synth_num = synthetic_df[numeric_cols]
-
-    real_loader_num = GenericDataLoader(real_num)
-    syn_loader_num = GenericDataLoader(synth_num)
+    real_loader_num = GenericDataLoader(real_encoded)
+    syn_loader_num = GenericDataLoader(synth_encoded)
 
     metric = AlphaPrecision()
     return metric.evaluate(real_loader_num, syn_loader_num)
@@ -176,30 +165,12 @@ def evaluate_prdc(
       - align real and synthetic on those columns,
       - build fresh GenericDataLoader instances on the numeric subset.
     """
-    # Get real dataframe from loader
+    # Get real dataframe from loader and encode both real + synthetic
     real_df = real_loader.dataframe()
+    real_encoded, synth_encoded = encode_for_metrics(real_df, synthetic_df)
 
-    # Numeric + boolean columns only
-    numeric_cols = real_df.select_dtypes(
-        include=[np.number, "bool"]
-    ).columns.tolist()
-
-    if not numeric_cols:
-        raise ValueError("No numeric columns available for PRDC.")
-
-    # Align columns between real and synthetic, just in case
-    numeric_cols = [c for c in numeric_cols if c in synthetic_df.columns]
-    if not numeric_cols:
-        raise ValueError(
-            "No overlapping numeric columns between real and synthetic data "
-            "for PRDC."
-        )
-
-    real_num = real_df[numeric_cols]
-    synth_num = synthetic_df[numeric_cols]
-
-    real_loader_num = GenericDataLoader(real_num)
-    syn_loader_num = GenericDataLoader(synth_num)
+    real_loader_num = GenericDataLoader(real_encoded)
+    syn_loader_num = GenericDataLoader(synth_encoded)
 
     metric = PRDCScore()
     return metric.evaluate(real_loader_num, syn_loader_num)
@@ -229,6 +200,173 @@ def display_prdc_scores(scores: dict) -> None:
             value_str = str(value)
 
         table.add_row(key, value_str)
+
+    console.print(table)
+
+
+def encode_for_metrics(
+    real_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Encode real + synthetic data into an all-numeric representation
+    suitable for metric evaluation (AlphaPrecision, PRDC, detection).
+
+    Strategy:
+      - fit an OrdinalEncoder on *real* categorical columns only,
+      - transform both real and synthetic categoricals with it,
+      - use original numeric/bool columns as-is,
+      - align on columns present in both real and synthetic.
+    """
+    # Identify numeric and categorical columns in the real data
+    real_numeric_cols = real_df.select_dtypes(
+        include=[np.number, "bool"]
+    ).columns.tolist()
+    real_cat_cols = real_df.select_dtypes(
+        include=["object", "category"]
+    ).columns.tolist()
+
+    # Keep only columns that exist in synthetic as well
+    numeric_cols = [c for c in real_numeric_cols if c in synthetic_df.columns]
+    cat_cols = [c for c in real_cat_cols if c in synthetic_df.columns]
+
+    if not numeric_cols and not cat_cols:
+        raise ValueError(
+            "No overlapping numeric or categorical columns between real and synthetic data "
+            "for metric encoding."
+        )
+
+    # Numeric part
+    real_num = real_df[numeric_cols] if numeric_cols else pd.DataFrame(index=real_df.index)
+    synth_num = synthetic_df[numeric_cols] if numeric_cols else pd.DataFrame(index=synthetic_df.index)
+
+    # Categorical part: fit encoder on real only, transform both
+    if cat_cols:
+        enc = OrdinalEncoder(
+            handle_unknown="use_encoded_value",
+            unknown_value=-1,
+        )
+        enc.fit(real_df[cat_cols])
+
+        real_cat_arr = enc.transform(real_df[cat_cols])
+        synth_cat_arr = enc.transform(synthetic_df[cat_cols])
+
+        real_cat = pd.DataFrame(
+            real_cat_arr,
+            columns=cat_cols,
+            index=real_df.index,
+        )
+        synth_cat = pd.DataFrame(
+            synth_cat_arr,
+            columns=cat_cols,
+            index=synthetic_df.index,
+        )
+    else:
+        real_cat = pd.DataFrame(index=real_df.index)
+        synth_cat = pd.DataFrame(index=synthetic_df.index)
+
+    # Combine numeric + encoded categoricals
+    real_encoded = pd.concat(
+        [real_num.reset_index(drop=True), real_cat.reset_index(drop=True)],
+        axis=1,
+    )
+    synth_encoded = pd.concat(
+        [synth_num.reset_index(drop=True), synth_cat.reset_index(drop=True)],
+        axis=1,
+    )
+
+    if real_encoded.empty or synth_encoded.empty:
+        raise ValueError("Encoded data for metrics is empty.")
+
+    return real_encoded, synth_encoded
+
+
+def evaluate_detection_scores(
+    real_loader,
+    synthetic_df: pd.DataFrame,
+) -> dict[str, float | None]:
+    """
+    Evaluate detection-based metrics using Synthcity's detection evaluators.
+
+    We follow the same pattern as AlphaPrecision/PRDC:
+      - use only numeric/bool columns,
+      - align real and synthetic on those columns,
+      - build fresh GenericDataLoader instances on the numeric subset.
+
+    Returns a dict mapping detector name -> AUCROC score (or None on failure).
+    Note: lower AUC values indicate better synthetic data (harder to detect).
+    """
+    # Get real dataframe from loader and encode both real + synthetic
+    real_df = real_loader.dataframe()
+    real_encoded, synth_encoded = encode_for_metrics(real_df, synthetic_df)
+
+    real_loader_num = GenericDataLoader(real_encoded)
+    syn_loader_num = GenericDataLoader(synth_encoded)
+
+    detectors = {
+        "detection_xgb": SyntheticDetectionXGB(),
+        "detection_mlp": SyntheticDetectionMLP(),
+        "detection_linear": SyntheticDetectionLinear(),
+        "detection_gmm": SyntheticDetectionGMM(),
+    }
+
+    scores: dict[str, float | None] = {}
+
+    for name, detector in detectors.items():
+        try:
+            result = detector.evaluate(real_loader_num, syn_loader_num)
+
+            # Typical Synthcity metric output: {'mean': float, 'std': float, ...}
+            auc: float | None
+            if isinstance(result, dict):
+                auc = result.get("mean")
+                if auc is None and "score" in result:
+                    auc = result["score"]
+                if auc is None and len(result) == 1:
+                    # Single-value dict fallback
+                    auc = float(next(iter(result.values())))
+            else:
+                auc = float(result)
+
+            scores[name] = float(auc) if auc is not None else None
+        except Exception as e:
+            console.print(
+                f"[yellow]⚠️ Detection metric '{name}' failed: {e}[/yellow]"
+            )
+            scores[name] = None
+
+    return scores
+
+
+def display_detection_scores(scores: dict[str, float | None]) -> None:
+    """Display detection AUCROC scores (lower is better)."""
+    table = Table(title="Detection Metrics (AUCROC: lower is better)")
+    table.add_column("Detector", style="cyan")
+    table.add_column("AUC", justify="right")
+    table.add_column("Quality", style="dim")
+
+    for name, auc in scores.items():
+        label = name.replace("_", " ").title()
+
+        if auc is None:
+            table.add_row(label, "[red]N/A[/red]", "error")
+            continue
+
+        # Interpret AUC: closer to 0.5 is better (harder to detect synthetic)
+        if auc <= 0.55:
+            quality = "Excellent"
+            auc_str = f"[green]{auc:.4f}[/green]"
+        elif auc <= 0.65:
+            quality = "Good"
+            auc_str = f"[green]{auc:.4f}[/green]"
+        elif auc <= 0.75:
+            quality = "Fair"
+            auc_str = f"[yellow]{auc:.4f}[/yellow]"
+        else:
+            quality = "Poor"
+            auc_str = f"[red]{auc:.4f}[/red]"
+
+        table.add_row(label, auc_str, quality)
 
     console.print(table)
 
@@ -534,7 +672,16 @@ def test(
     except Exception as e:
         console.print(f"[yellow]⚠️ PRDC evaluation failed: {e}[/yellow]")
 
-    # 11. GPU memory usage
+    # 11. Detection-based evaluation (real vs synthetic)
+    console.print("\n[bold cyan]🕵️ Detection-Based Evaluation[/bold cyan]")
+    detection_scores: dict[str, float | None] | None = None
+    try:
+        detection_scores = evaluate_detection_scores(loader, synthetic_df)
+        display_detection_scores(detection_scores)
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Detection evaluation failed: {e}[/yellow]")
+
+    # 12. GPU memory usage
     if torch.cuda.is_available():
         console.print("\n[bold cyan]🔍 GPU Memory Usage[/bold cyan]")
         allocated = torch.cuda.memory_allocated(0) / 1024**2
@@ -547,7 +694,7 @@ def test(
         else:
             console.print("  ⚠️ No GPU memory allocated")
 
-    # 12. Summary
+    # 13. Summary
     summary_table = Table(title="Synthcity Test Summary", show_header=False)
     summary_table.add_column("Check", style="cyan")
     summary_table.add_column("Status", style="green")
@@ -586,6 +733,14 @@ def test(
             )
         else:
             summary_table.add_row("PRDC", "✅ Evaluated")
+    if detection_scores is not None:
+        # Ensemble: mean AUC across successful detectors
+        vals = [v for v in detection_scores.values() if v is not None]
+        if vals:
+            ensemble_auc = float(np.mean(vals))
+            summary_table.add_row("Detection (AUC)", f"{ensemble_auc:.3f}")
+        else:
+            summary_table.add_row("Detection (AUC)", "⚠️ No valid scores")            
     if schema_ok:
         summary_table.add_row("Schema", "✅ Valid")
     else:
