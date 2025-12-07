@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from synthcity.metrics.eval_statistical import AlphaPrecision
+from synthcity.metrics.eval_statistical import AlphaPrecision, PRDCScore
 from synthcity.plugins.core.dataloader import GenericDataLoader
 
 app = typer.Typer(help="Synthcity Plugin Test CLI for PyTorch 2.7 + CUDA 12.8")
@@ -142,6 +142,76 @@ def display_alpha_precision_scores(scores: dict) -> None:
         "delta_coverage_beta_naive",
         "authenticity_naive",
     ]
+
+    for key in ordered_keys:
+        if key not in scores:
+            continue
+
+        value = scores[key]
+        if isinstance(value, (int, float)):
+            if value >= 0.9:
+                value_str = f"[green]{value:.4f}[/green]"
+            elif value >= 0.7:
+                value_str = f"[yellow]{value:.4f}[/yellow]"
+            else:
+                value_str = f"[red]{value:.4f}[/red]"
+        else:
+            value_str = str(value)
+
+        table.add_row(key, value_str)
+
+    console.print(table)
+
+
+def evaluate_prdc(
+    real_loader,
+    synthetic_df: pd.DataFrame,
+) -> dict:
+    """
+    Compute PRDC (precision / recall / density / coverage) on numeric columns only.
+
+    The metric only supports numeric dtypes, so we:
+      - extract the underlying real dataframe,
+      - select numeric/bool columns,
+      - align real and synthetic on those columns,
+      - build fresh GenericDataLoader instances on the numeric subset.
+    """
+    # Get real dataframe from loader
+    real_df = real_loader.dataframe()
+
+    # Numeric + boolean columns only
+    numeric_cols = real_df.select_dtypes(
+        include=[np.number, "bool"]
+    ).columns.tolist()
+
+    if not numeric_cols:
+        raise ValueError("No numeric columns available for PRDC.")
+
+    # Align columns between real and synthetic, just in case
+    numeric_cols = [c for c in numeric_cols if c in synthetic_df.columns]
+    if not numeric_cols:
+        raise ValueError(
+            "No overlapping numeric columns between real and synthetic data "
+            "for PRDC."
+        )
+
+    real_num = real_df[numeric_cols]
+    synth_num = synthetic_df[numeric_cols]
+
+    real_loader_num = GenericDataLoader(real_num)
+    syn_loader_num = GenericDataLoader(synth_num)
+
+    metric = PRDCScore()
+    return metric.evaluate(real_loader_num, syn_loader_num)
+
+
+def display_prdc_scores(scores: dict) -> None:
+    """Display PRDC scores: precision, recall, density, coverage."""
+    table = Table(title="PRDC (Precision / Recall / Density / Coverage)")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    ordered_keys = ["precision", "recall", "density", "coverage"]
 
     for key in ordered_keys:
         if key not in scores:
@@ -455,7 +525,16 @@ def test(
     except Exception as e:
         console.print(f"[yellow]⚠️ Alpha-Precision evaluation failed: {e}[/yellow]")
 
-    # 10. GPU memory usage
+    # 10. PRDC (Precision / Recall / Density / Coverage)
+    console.print("\n[bold cyan]📊 PRDC Evaluation[/bold cyan]")
+    prdc_scores = None
+    try:
+        prdc_scores = evaluate_prdc(loader, synthetic_df)
+        display_prdc_scores(prdc_scores)
+    except Exception as e:
+        console.print(f"[yellow]⚠️ PRDC evaluation failed: {e}[/yellow]")
+
+    # 11. GPU memory usage
     if torch.cuda.is_available():
         console.print("\n[bold cyan]🔍 GPU Memory Usage[/bold cyan]")
         allocated = torch.cuda.memory_allocated(0) / 1024**2
@@ -468,7 +547,7 @@ def test(
         else:
             console.print("  ⚠️ No GPU memory allocated")
 
-    # 11. Summary
+    # 12. Summary
     summary_table = Table(title="Synthcity Test Summary", show_header=False)
     summary_table.add_column("Check", style="cyan")
     summary_table.add_column("Status", style="green")
@@ -484,6 +563,29 @@ def test(
         summary_table.add_row("Training Time", f"{train_seconds:.2f} s")
     summary_table.add_row("Save/Load", "✅ Working")
     summary_table.add_row("Generation", f"✅ {samples:,} samples")
+    if alpha_scores is not None:
+        # Show OC variant if available, otherwise just note that it ran
+        oc_alpha = alpha_scores.get("delta_precision_alpha_OC")
+        oc_beta = alpha_scores.get("delta_coverage_beta_OC")
+        if oc_alpha is not None and oc_beta is not None:
+            summary_table.add_row(
+                "Alpha-Precision",
+                f"α_OC={oc_alpha:.3f}, β_OC={oc_beta:.3f}",
+            )
+        else:
+            summary_table.add_row("Alpha-Precision", "✅ Evaluated")
+    if prdc_scores is not None:
+        p = prdc_scores.get("precision")
+        r = prdc_scores.get("recall")
+        d = prdc_scores.get("density")
+        c = prdc_scores.get("coverage")
+        if None not in (p, r, d, c):
+            summary_table.add_row(
+                "PRDC",
+                f"P={p:.3f}, R={r:.3f}, D={d:.3f}, C={c:.3f}",
+            )
+        else:
+            summary_table.add_row("PRDC", "✅ Evaluated")
     if schema_ok:
         summary_table.add_row("Schema", "✅ Valid")
     else:
